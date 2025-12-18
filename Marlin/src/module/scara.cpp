@@ -139,26 +139,32 @@ float segments_per_second = DEFAULT_SEGMENTS_PER_SECOND;
 #elif ENABLED(MP_SCARA)
 
   void scara_set_axis_is_at_home(const AxisEnum axis) {
-    if (axis == Z_AXIS)
+    if (axis == Z_AXIS) {
       current_position.z = Z_HOME_POS;
-    else {
-      // MP_SCARA uses arm angles for AB home position
-      #ifndef SCARA_OFFSET_THETA1
-        #define SCARA_OFFSET_THETA1  12 // degrees
-      #endif
-      #ifndef SCARA_OFFSET_THETA2
-        #define SCARA_OFFSET_THETA2 131 // degrees
-      #endif
-      ab_float_t homeposition = { SCARA_OFFSET_THETA1, SCARA_OFFSET_THETA2 };
-      //DEBUG_ECHOLNPGM("homeposition A:", homeposition.a, " B:", homeposition.b);
-
-      inverse_kinematics(homeposition);
-      forward_kinematics(delta.a, delta.b);
-      current_position[axis] = cartes[axis];
-
-      //DEBUG_ECHOLNPGM_P(PSTR("Cartesian X"), current_position.x, SP_Y_LBL, current_position.y);
-      update_software_endstops(axis);
+      return;
     }
+
+    // ⚠️ 이 기본값 define는 가능하면 Configuration.h에서만 정의하는 걸 추천하지만,
+    // 네 구조 유지하려면 남겨도 됨.
+    #ifndef SCARA_OFFSET_THETA1
+      #define SCARA_OFFSET_THETA1  12   // degrees
+    #endif
+    #ifndef SCARA_OFFSET_THETA2
+      #define SCARA_OFFSET_THETA2 131   // degrees
+    #endif
+
+    // ✅ 핵심: "각도(deg)"를 delta(A/B 각도)에 직접 넣고
+    // 기존에 잘 되던 forward_kinematics(delta.a, delta.b)를 그대로 사용
+    delta.set(SCARA_OFFSET_THETA1, SCARA_OFFSET_THETA2, current_position.z);
+
+    forward_kinematics(delta.a, delta.b);
+
+    // ✅ SCARA는 X/Y를 세트로 확정하는 게 안정적
+    current_position.x = cartes.x;
+    current_position.y = cartes.y;
+
+    update_software_endstops(X_AXIS);
+    update_software_endstops(Y_AXIS);
   }
 
   void inverse_kinematics(const xyz_pos_t &raw) {
@@ -168,13 +174,11 @@ float segments_per_second = DEFAULT_SEGMENTS_PER_SECOND;
                 THETA2 = THETA3 - ACOS((sq(c) + sq(L2) - sq(L1)) / (2.0f * c * L2));
 
     delta.set(DEGREES(THETA1), DEGREES(THETA2), raw.z);
-
-    /*
-      DEBUG_POS("SCARA IK", raw);
-      DEBUG_POS("SCARA IK", delta);
-      SERIAL_ECHOLNPGM("  SCARA (x,y) ", x, ",", y," Theta1=", THETA1, " Theta2=", THETA2);
-    //*/
   }
+
+
+
+
 
 #elif ENABLED(AXEL_TPARA)
 

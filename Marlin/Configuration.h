@@ -169,8 +169,8 @@
 //#define Z2_DRIVER_TYPE A4988
 //#define Z3_DRIVER_TYPE A4988
 //#define Z4_DRIVER_TYPE A4988
-//#define I_DRIVER_TYPE  A4988
-//#define J_DRIVER_TYPE  A4988
+//#define I_DRIVER_TYPE  TMC2209
+//#define J_DRIVER_TYPE  TMC2209
 //#define K_DRIVER_TYPE  A4988
 //#define U_DRIVER_TYPE  A4988
 //#define V_DRIVER_TYPE  A4988
@@ -995,8 +995,8 @@
 
   // SCARA tower offset (position of Tower relative to bed zero position)
   // This needs to be reasonably accurate as it defines the printbed position in the SCARA space.
-  #define SCARA_OFFSET_X  100       // (mm)
-  #define SCARA_OFFSET_Y  -56       // (mm)
+  #define SCARA_OFFSET_X  0       
+  #define SCARA_OFFSET_Y  0       
 
   #if ENABLED(MORGAN_SCARA)
 
@@ -1011,10 +1011,11 @@
 
   #elif ENABLED(MP_SCARA)
 
-    #define SCARA_OFFSET_THETA1  12 // degrees
-    #define SCARA_OFFSET_THETA2 131 // degrees
+    #define SCARA_OFFSET_THETA1  -44.12// degrees (홈 동작 정상화 후 실제 각도로 보정)
+    #define SCARA_OFFSET_THETA2  51.72// degrees (홈 동작 정상화 후 실제 각도로 보정)
 
   #endif
+
 
 #endif
 
@@ -1080,7 +1081,7 @@
 //#define USE_WMAX_PLUG
 
 // Enable pullup for all endstops to prevent a floating state
-//#define ENDSTOPPULLUPS
+#define ENDSTOPPULLUPS
 #if DISABLED(ENDSTOPPULLUPS)
   // Disable ENDSTOPPULLUPS to set pullups individually
   //#define ENDSTOPPULLUP_XMIN
@@ -1196,7 +1197,7 @@
  * Override with M92
  *                                      X, Y, Z [, I [, J [, K...]]], E0 [, E1[, E2...]]
  */
-#define DEFAULT_AXIS_STEPS_PER_UNIT   { 35.56, 35.56, 800, 500 }
+#define DEFAULT_AXIS_STEPS_PER_UNIT   { 177.78, 106.67, 800, 500 }
 
 /**
  * Default Max Feed Rate (linear=mm/s, rotational=°/s)
@@ -1724,15 +1725,15 @@
 // @section geometry
 
 // The size of the printable area
-#define X_BED_SIZE 500
-#define Y_BED_SIZE 500
+#define X_BED_SIZE 200
+#define Y_BED_SIZE 200
 
 // Travel limits (linear=mm, rotational=°) after homing, corresponding to endstop positions.
-#define X_MIN_POS -250
-#define Y_MIN_POS -250
+#define X_MIN_POS -1000
+#define Y_MIN_POS -1000
 #define Z_MIN_POS 0
-#define X_MAX_POS 250
-#define Y_MAX_POS 250
+#define X_MAX_POS 10000
+#define Y_MAX_POS 10000
 #define Z_MAX_POS 150
 //#define I_MIN_POS 0
 //#define I_MAX_POS 50
@@ -2105,8 +2106,8 @@
 
 // Manually set the home position. Leave these undefined for automatic settings.
 // For DELTA this is the top-center of the Cartesian print volume.
-//#define MANUAL_X_HOME_POS 0
-//#define MANUAL_Y_HOME_POS 0
+#define MANUAL_X_HOME_POS 45
+#define MANUAL_Y_HOME_POS 0
 //#define MANUAL_Z_HOME_POS 0
 //#define MANUAL_I_HOME_POS 0
 //#define MANUAL_J_HOME_POS 0
@@ -2130,7 +2131,7 @@
 #endif
 
 // Homing speeds (linear=mm/min, rotational=°/min)
-#define HOMING_FEEDRATE_MM_M { (60*60), (60*60), (4*60) }
+#define HOMING_FEEDRATE_MM_M { (40*60), (40*60), (4*60) }
 
 // Validate that endstops are triggered on homing moves
 //#define VALIDATE_HOMING_ENDSTOPS
