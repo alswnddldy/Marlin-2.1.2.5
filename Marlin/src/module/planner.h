@@ -872,6 +872,19 @@ class Planner {
       , const PlannerHints &hints=PlannerHints()
     );
 
+    // ✅ Public wrapper to allow raw ABCE moves from other modules (e.g., G28.cpp)
+    static bool buffer_segment_public(const abce_pos_t &abce
+      OPTARG(HAS_DIST_MM_ARG, const xyze_float_t &cart_dist_mm)
+      , const_feedRate_t fr_mm_s
+      , const uint8_t extruder = active_extruder
+      , const PlannerHints &hints = PlannerHints()
+    ) {
+      return buffer_segment(abce
+        OPTARG(HAS_DIST_MM_ARG, cart_dist_mm)
+        , fr_mm_s, extruder, hints
+    );
+  }
+
     #if ENABLED(DIRECT_STEPPING)
       static void buffer_page(const page_idx_t page_idx, const uint8_t extruder, const uint16_t num_steps);
     #endif

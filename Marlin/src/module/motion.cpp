@@ -145,17 +145,20 @@ xyz_pos_t cartes;
     abc_pos_t scara_home_offset;
   #endif
 
-  #if HAS_SOFTWARE_ENDSTOPS
+  #if IS_SCARA
+    constexpr float delta_max_radius   = SCARA_PRINTABLE_RADIUS;
+    constexpr float delta_max_radius_2 = sq(SCARA_PRINTABLE_RADIUS);
+
+  #elif HAS_SOFTWARE_ENDSTOPS
     float delta_max_radius, delta_max_radius_2;
-  #elif IS_SCARA
-    constexpr float delta_max_radius = SCARA_PRINTABLE_RADIUS,
-                    delta_max_radius_2 = sq(SCARA_PRINTABLE_RADIUS);
+
   #else // DELTA
-    constexpr float delta_max_radius = DELTA_PRINTABLE_RADIUS,
-                    delta_max_radius_2 = sq(DELTA_PRINTABLE_RADIUS);
+    constexpr float delta_max_radius   = DELTA_PRINTABLE_RADIUS;
+    constexpr float delta_max_radius_2 = sq(DELTA_PRINTABLE_RADIUS);
   #endif
 
 #endif
+
 
 /**
  * The workspace can be offset by some commands, or
@@ -1704,119 +1707,97 @@ void prepare_line_to_destination() {
   #endif // SENSORLESS_HOMING
 
   /**
- * Home an individual linear axis
- */
-void do_homing_move(const AxisEnum axis, const float distance,
-                    const feedRate_t fr_mm_s/*=0.0*/, const bool final_approach/*=true*/) {
+   * Home an individual linear axis
+   */
+  void do_homing_move(const AxisEnum axis, const float distance, const feedRate_t fr_mm_s=0.0, const bool final_approach=true) {
+    DEBUG_SECTION(log_move, "do_homing_move", DEBUGGING(LEVELING));
 
-  DEBUG_SECTION(log_move, "do_homing_move", DEBUGGING(LEVELING));
+    const feedRate_t home_fr_mm_s = fr_mm_s ?: homing_feedrate(axis);
 
-  const feedRate_t home_fr_mm_s = fr_mm_s ?: homing_feedrate(axis);
-
-  if (DEBUGGING(LEVELING)) {
-    DEBUG_ECHOPGM("...(", C(AXIS_CHAR(axis)), ", ", distance, ", ");
-    if (fr_mm_s)
-      DEBUG_ECHO(fr_mm_s);
-    else
-      DEBUG_ECHOPGM("[", home_fr_mm_s, "]");
-    DEBUG_ECHOLNPGM(")");
-  }
-
-  // Only do some things when moving towards an endstop
-  const int8_t axis_home_dir = TERN0(DUAL_X_CARRIAGE, axis == X_AXIS)
-                ? TOOL_X_HOME_DIR(active_extruder) : home_dir(axis);
-  const bool is_home_dir = (axis_home_dir > 0) == (distance > 0);
-
-  #if ENABLED(SENSORLESS_HOMING)
-    sensorless_t stealth_states;
-  #endif
-
-  if (is_home_dir) {
-
-    if (TERN0(HOMING_Z_WITH_PROBE, axis == Z_AXIS)) {
-      #if ALL(HAS_HEATED_BED, WAIT_FOR_BED_HEATER)
-        thermalManager.wait_for_bed_heating();
-      #endif
-
-      #if ALL(HAS_HOTEND, WAIT_FOR_HOTEND)
-        thermalManager.wait_for_hotend_heating(active_extruder);
-      #endif
-
-      TERN_(HAS_QUIET_PROBING, if (final_approach) probe.set_probing_paused(true));
+    if (DEBUGGING(LEVELING)) {
+      DEBUG_ECHOPGM("...(", C(AXIS_CHAR(axis)), ", ", distance, ", ");
+      if (fr_mm_s)
+        DEBUG_ECHO(fr_mm_s);
+      else
+        DEBUG_ECHOPGM("[", home_fr_mm_s, "]");
+      DEBUG_ECHOLNPGM(")");
     }
 
-    // Disable stealthChop if used. Enable diag1 pin on driver.
+    // Only do some things when moving towards an endstop
+    const int8_t axis_home_dir = TERN0(DUAL_X_CARRIAGE, axis == X_AXIS)
+                  ? TOOL_X_HOME_DIR(active_extruder) : home_dir(axis);
+    const bool is_home_dir = (axis_home_dir > 0) == (distance > 0);
+
     #if ENABLED(SENSORLESS_HOMING)
-      stealth_states = start_sensorless_homing_per_axis(axis);
-      #if SENSORLESS_STALLGUARD_DELAY
-        safe_delay(SENSORLESS_STALLGUARD_DELAY);
+      sensorless_t stealth_states;
+    #endif
+
+    if (is_home_dir) {
+
+      if (TERN0(HOMING_Z_WITH_PROBE, axis == Z_AXIS)) {
+        #if ALL(HAS_HEATED_BED, WAIT_FOR_BED_HEATER)
+          // Wait for bed to heat back up between probing points
+          thermalManager.wait_for_bed_heating();
+        #endif
+
+        #if ALL(HAS_HOTEND, WAIT_FOR_HOTEND)
+          // Wait for the hotend to heat back up between probing points
+          thermalManager.wait_for_hotend_heating(active_extruder);
+        #endif
+
+        TERN_(HAS_QUIET_PROBING, if (final_approach) probe.set_probing_paused(true));
+      }
+
+      // Disable stealthChop if used. Enable diag1 pin on driver.
+      #if ENABLED(SENSORLESS_HOMING)
+        stealth_states = start_sensorless_homing_per_axis(axis);
+        #if SENSORLESS_STALLGUARD_DELAY
+          safe_delay(SENSORLESS_STALLGUARD_DELAY); // Short delay needed to settle
+        #endif
       #endif
+    }
+
+    #if ENABLED(MORGAN_SCARA)
+      // Tell the planner the axis is at 0
+      current_position[axis] = 0;
+      sync_plan_position();
+      current_position[axis] = distance;
+      line_to_current_position(home_fr_mm_s);
+    #else
+      // Get the ABC or XYZ positions in mm
+      abce_pos_t target = planner.get_axis_positions_mm();
+
+      target[axis] = 0;                         // Set the single homing axis to 0
+      planner.set_machine_position_mm(target);  // Update the machine position
+
+      #if HAS_DIST_MM_ARG
+        const xyze_float_t cart_dist_mm{0};
+      #endif
+
+      // Set delta/cartesian axes directly
+      target[axis] = distance;                  // The move will be towards the endstop
+      planner.buffer_segment(target OPTARG(HAS_DIST_MM_ARG, cart_dist_mm), home_fr_mm_s, active_extruder);
     #endif
-  }
-
-  // ---- movement plan ----
-  #if ANY(MORGAN_SCARA, MP_SCARA)
-
-    const AxisEnum motor_axis =
-      (axis == X_AXIS) ? A_AXIS :
-      (axis == Y_AXIS) ? B_AXIS :
-      axis;
-
-    abce_pos_t target = planner.get_axis_positions_mm();
-
-  // ✅ (중요) 홈 이동 시작점을 machine_position으로 확정
-    target[motor_axis] = 0;
-    planner.set_machine_position_mm(target);
-
-    #if HAS_DIST_MM_ARG
-      const xyze_float_t cart_dist_mm{0};
-    #endif
-
-    target[motor_axis] = distance;
-    planner.buffer_segment(target OPTARG(HAS_DIST_MM_ARG, cart_dist_mm), home_fr_mm_s, active_extruder);
-
-  #else
-
-    abce_pos_t target = planner.get_axis_positions_mm();
-
-    target[axis] = 0;
-    planner.set_machine_position_mm(target);
-
-    #if HAS_DIST_MM_ARG
-      const xyze_float_t cart_dist_mm{0};
-    #endif
-
-    target[axis] = distance;
-    planner.buffer_segment(target OPTARG(HAS_DIST_MM_ARG, cart_dist_mm), home_fr_mm_s, active_extruder);
-
-  #endif
 
     planner.synchronize();
 
-  // ---- finalize current_position so Theta/Psi (Count A/B) are not 0 ----
-  #if ANY(MORGAN_SCARA, MP_SCARA)
-  // 홈 끝난 뒤: 스텝퍼/플래너 기반으로 current_position 갱신 + planner 동기화
-    set_current_from_steppers_for_axis(ALL_AXES_ENUM);
-    sync_plan_position();
-  #endif
+    if (is_home_dir) {
 
-  if (is_home_dir) {
-
-    #if HOMING_Z_WITH_PROBE && HAS_QUIET_PROBING
-      if (axis == Z_AXIS && final_approach) probe.set_probing_paused(false);
-    #endif
-
-    endstops.validate_homing_move();
-
-    #if ENABLED(SENSORLESS_HOMING)
-      end_sensorless_homing_per_axis(axis, stealth_states);
-      #if SENSORLESS_STALLGUARD_DELAY
-        safe_delay(SENSORLESS_STALLGUARD_DELAY);
+      #if HOMING_Z_WITH_PROBE && HAS_QUIET_PROBING
+        if (axis == Z_AXIS && final_approach) probe.set_probing_paused(false);
       #endif
-    #endif
-  }
-}
 
+      endstops.validate_homing_move();
+
+      // Re-enable stealthChop if used. Disable diag1 pin on driver.
+      #if ENABLED(SENSORLESS_HOMING)
+        end_sensorless_homing_per_axis(axis, stealth_states);
+        #if SENSORLESS_STALLGUARD_DELAY
+          safe_delay(SENSORLESS_STALLGUARD_DELAY); // Short delay needed to settle
+        #endif
+      #endif
+    }
+  }
 
   /**
    * Set an axis to be unhomed. (Unless we are on a machine - e.g. a cheap Chinese CNC machine -
@@ -1974,24 +1955,16 @@ void do_homing_move(const AxisEnum axis, const float distance,
 
   void homeaxis(const AxisEnum axis) {
 
-  // 1) _CAN_HOME는 SCARA/비SCARA 상관없이 항상 정의
-  #define _CAN_HOME(A) (axis == _AXIS(A) && ( \
-       ENABLED(A##_SPI_SENSORLESS) \
-    || TERN0(HAS_Z_AXIS, TERN0(HOMING_Z_WITH_PROBE, _AXIS(A) == Z_AXIS)) \
-    || TERN0(A##_HOME_TO_MIN, A##_MIN_PIN > -1) \
-    || TERN0(A##_HOME_TO_MAX, A##_MAX_PIN > -1) \
-  ))
-
-  // 2) MP_SCARA 포함 SCARA에서도 "홈 가능한 축만" 홈 허용
-  #if ANY(MORGAN_SCARA, MP_SCARA)
-    // ✅ A/B(관절축)로 homeaxis가 호출되는 커스텀 케이스는 통과
-    if (axis != A_AXIS && axis != B_AXIS) {
-      if (!_CAN_HOME(X) && !_CAN_HOME(Y) && !_CAN_HOME(Z)) {
-        BUZZ(100, 880);
-        return;
-      }
-    }
+  #if ENABLED(MORGAN_SCARA)
+    // Only Z homing (with probe) is permitted
+    if (axis != Z_AXIS) { BUZZ(100, 880); return; }
   #else
+    #define _CAN_HOME(A) (axis == _AXIS(A) && ( \
+         ENABLED(A##_SPI_SENSORLESS) \
+      || TERN0(HAS_Z_AXIS, TERN0(HOMING_Z_WITH_PROBE, _AXIS(A) == Z_AXIS)) \
+      || TERN0(A##_HOME_TO_MIN, A##_MIN_PIN > -1) \
+      || TERN0(A##_HOME_TO_MAX, A##_MAX_PIN > -1) \
+    ))
     #define _ANDCANT(N) && !_CAN_HOME(N)
     if (true MAIN_AXIS_MAP(_ANDCANT)) return;
   #endif
@@ -1999,7 +1972,9 @@ void do_homing_move(const AxisEnum axis, const float distance,
   if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM(">>> homeaxis(", C(AXIS_CHAR(axis)), ")");
 
   const int axis_home_dir = TERN0(DUAL_X_CARRIAGE, axis == X_AXIS)
-              ? TOOL_X_HOME_DIR(active_extruder) : home_dir(axis);
+              ? TOOL_X_HOME_DIR(active_extruder)
+              : home_dir(axis);
+
 
     //
     // Homing Z with a probe? Raise Z (maybe) and deploy the Z probe.
@@ -2255,13 +2230,12 @@ void do_homing_move(const AxisEnum axis, const float distance,
     #endif
 
     #if IS_SCARA
-  // SCARA / MP_SCARA 공통
-  // 홈 완료 시 반드시 SCARA 전용 홈 확정 로직을 탄다
-      scara_set_axis_is_at_home(axis);
+
+      set_axis_is_at_home(axis);
       sync_plan_position();
 
     #elif ENABLED(DELTA)
-    
+
       // Delta has already moved all three towers up in G28
       // so here it re-homes each tower in turn.
       // Delta homing treats the axes as normal linear axes.
@@ -2291,27 +2265,20 @@ void do_homing_move(const AxisEnum axis, const float distance,
 
     #if DISABLED(DELTA) && defined(HOMING_BACKOFF_POST_MM)
       const xyz_float_t endstop_backoff = HOMING_BACKOFF_POST_MM;
-
       if (endstop_backoff[axis]) {
-        const float back = ABS(endstop_backoff[axis]) * axis_home_dir;
+        current_position[axis] -= ABS(endstop_backoff[axis]) * axis_home_dir;
+        line_to_current_position(TERN_(HOMING_Z_WITH_PROBE, (axis == Z_AXIS) ? z_probe_fast_mm_s :) homing_feedrate(axis));
 
-    #if IS_SCARA
-      do_homing_move(axis, -back, homing_feedrate(axis), false);
-      sync_plan_position();
-
-      #if ENABLED(MP_SCARA)
-        // (여기 줄은 컴파일 되는지 확인 후 유지/조정)
-        set_current_from_steppers_for_axis(ALL_AXES_ENUM);
-      #endif
-
-    #else
-      current_position[axis] -= back;
-      line_to_current_position(homing_feedrate(axis));
+        #if ENABLED(SENSORLESS_HOMING)
+          planner.synchronize();
+          if (false
+            #ifdef NORMAL_AXIS
+              || axis != NORMAL_AXIS
+            #endif
+          ) safe_delay(200);  // Short delay to allow belts to spring back
+        #endif
+      }
     #endif
-  }
-#endif
-
-
 
     // Clear retracted status if homing the Z axis
     #if ENABLED(FWRETRACT)
@@ -2355,32 +2322,13 @@ void set_axis_is_at_home(const AxisEnum axis) {
     }
   #endif
 
- #if IS_SCARA
-
-  #if ENABLED(MP_SCARA)
-    // MP_SCARA: X/Y뿐 아니라 A/B 홈도 scara_set_axis_is_at_home로 덮어쓰지 말고
-    // 스텝퍼 기반(FK)으로 current_position(X/Y/Theta/Psi)을 갱신
-    if (axis == X_AXIS || axis == Y_AXIS || axis == A_AXIS || axis == B_AXIS) {
-      set_current_from_steppers_for_axis(ALL_AXES_ENUM);
-    }
-    else {
-      scara_set_axis_is_at_home(axis);
-    }
-  #else
+  #if ANY(MORGAN_SCARA, MP_SCARA, AXEL_TPARA)
     scara_set_axis_is_at_home(axis);
+  #elif ENABLED(DELTA)
+    current_position[axis] = (axis == Z_AXIS) ? DIFF_TERN(HAS_BED_PROBE, delta_height, probe.offset.z) : base_home_pos(axis);
+  #else
+    current_position[axis] = base_home_pos(axis);
   #endif
-
-#elif ENABLED(DELTA)
-
-  current_position[axis] = (axis == Z_AXIS)
-    ? DIFF_TERN(HAS_BED_PROBE, delta_height, probe.offset.z)
-    : base_home_pos(axis);
-
-#else
-
-  current_position[axis] = base_home_pos(axis);
-
-#endif
 
   /**
    * Z Probe Z Homing? Account for the probe's Z offset.
@@ -2389,10 +2337,7 @@ void set_axis_is_at_home(const AxisEnum axis) {
     if (axis == Z_AXIS) {
       #if HOMING_Z_WITH_PROBE
         current_position.z -= probe.offset.z;
-        if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM(
-          "*** Z HOMED WITH PROBE (Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN) ***\n> probe.offset.z = ",
-          probe.offset.z
-        );
+        if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("*** Z HOMED WITH PROBE (Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN) ***\n> probe.offset.z = ", probe.offset.z);
       #else
         if (DEBUGGING(LEVELING)) DEBUG_ECHOLNPGM("*** Z HOMED TO ENDSTOP ***");
       #endif
@@ -2400,6 +2345,7 @@ void set_axis_is_at_home(const AxisEnum axis) {
   #endif
 
   TERN_(I2C_POSITION_ENCODERS, I2CPEM.homed(axis));
+
   TERN_(BABYSTEP_DISPLAY_TOTAL, babystep.reset_total(axis));
 
   #if HAS_POSITION_SHIFT

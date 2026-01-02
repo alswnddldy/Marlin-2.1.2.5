@@ -611,6 +611,36 @@ void GcodeSuite::G28() {
     #endif
   #endif // HAS_HOMING_CURRENT
 
+#if ENABLED(MP_SCARA)
+
+  if (doY && !doX) {
+
+    constexpr float PSI_OPEN = 10.46f; 
+    //팔꿈치(psi) 각도
+    constexpr float FR = 10.0f;          // 천천히
+
+    abce_pos_t target = planner.get_axis_positions_mm(); // 현재 ABCE 읽기 :contentReference[oaicite:5]{index=5}
+    target[B_AXIS] = PSI_OPEN;                            // ✅ 팔꿈치(B)만 변경
+
+    #if HAS_DIST_MM_ARG
+      const xyze_float_t cart_dist_mm{0};                 // 길이 힌트 (없어도 됨)
+    #endif
+
+    Planner::buffer_segment_public(target
+      OPTARG(HAS_DIST_MM_ARG, cart_dist_mm)
+      , FR, active_extruder
+    );
+
+    planner.synchronize();
+
+    current_position.x = 100.0f;
+    current_position.y = 220.0f;
+    sync_plan_position();
+  }
+
+#endif
+
+
   ui.refresh();
 
   TERN_(HAS_DWIN_E3V2_BASIC, DWIN_HomingDone());

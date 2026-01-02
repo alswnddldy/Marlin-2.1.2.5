@@ -66,8 +66,8 @@
 // Limit Switches for endstops
 //#define X_MIN_PIN                           PA14  // Not used (using X_MAX)
 #define X_MAX_PIN                           PA14  // X+ connector (optical sensor)
-#define Y_MIN_PIN                           PA15  // Y- connector (mechanical switch)
-//#define Y_MAX_PIN                           PA15  // Not used
+//#define Y_MIN_PIN                           PA15  // Y- connector (mechanical switch)
+#define Y_MAX_PIN                           PA15  // Not used
 #define Z_MIN_PIN                           PB13
 #define Z_MAX_PIN                           PB12
 
