@@ -517,8 +517,56 @@ void GcodeSuite::G28() {
     #endif
 
     sync_plan_position();
+ // ===== MP_SCARA: G28 Y 후 정면(Theta=G28X 자세 유지 + Psi=0°)을 X120,Y250으로 라벨링 =====
+    #if ENABLED(MP_SCARA)
+      // G28 Y 단독 명령일 때만 실행 (G28 X, G28, G28 Z 등에서는 실행 안 함)
+      if (!doX && doY && !doZ) {
 
-  #endif
+        // G28X 상태에서의 팔꿈치 정면 각도 (지금은 Psi=0°가 정면)
+        constexpr float PSI_FRONT = -11.0f;
+        constexpr float FR        = 10.0f;  // 관절 회전 속도 (mm/s)
+
+        // 1) 현재 ABCE(관절) 위치 읽기
+        abce_pos_t target = planner.get_axis_positions_mm();
+
+        // 2) X축(Theta, A_AXIS)은 그대로 두고,
+        //    Y축(팔꿈치, Psi = B_AXIS)만 정면 각도로 세팅
+        //    → G28X에서 만든 X정면 자세를 유지하면서 팔만 펴는 동작
+        target[B_AXIS] = PSI_FRONT;
+
+        #if HAS_DIST_MM_ARG
+          const xyze_float_t cart_dist_mm{0};
+        #endif
+
+        // 3) 관절 공간(Theta/Psi) 기준으로 실제로 기계를 움직이기
+        Planner::buffer_segment_public(
+          target
+          OPTARG(HAS_DIST_MM_ARG, cart_dist_mm),
+          FR,
+          active_extruder
+        );
+        planner.synchronize();
+
+        // 4) 최종 A/B(Theta/Psi) 값 기준으로 XY를 다시 계산
+        abce_pos_t final_abce = planner.get_axis_positions_mm();
+        const float theta_now = final_abce[A_AXIS];
+        const float psi_now   = final_abce[B_AXIS];
+
+        forward_kinematics(theta_now, psi_now);
+
+        // 5) 이 자세를 논리 좌표 (120,250)의 정면으로 라벨링
+        //    → 앞으로 G1 X120 Y250 하면 항상 이 포즈로 돌아옴
+        current_position.x = 120.0f;
+        current_position.y = 250.0f;
+        // Z, E는 그대로 유지
+        sync_plan_position();
+      }
+    #endif
+    // ===== MP_SCARA 정면(X120,Y250) 보정 끝 =====
+
+  #endif // (원래 있던 큰 #else 블록 종료 주석)
+
+
 
   /**
    * Preserve DXC mode across a G28 for IDEX printers in DXC_DUPLICATION_MODE.
@@ -610,47 +658,6 @@ void GcodeSuite::G28() {
       safe_delay(SENSORLESS_STALLGUARD_DELAY); // Short delay needed to settle
     #endif
   #endif // HAS_HOMING_CURRENT
-
-#if ENABLED(MP_SCARA)
-
-  if (doY && !doX) {
-
-    constexpr float PSI_OPEN = 10.46f; 
-    //팔꿈치(psi) 각도
-    constexpr float FR = 10.0f;          // 천천히
-
-    abce_pos_t target = planner.get_axis_positions_mm(); // 현재 ABCE 읽기 :contentReference[oaicite:5]{index=5}
-    target[B_AXIS] = PSI_OPEN;                            // ✅ 팔꿈치(B)만 변경
-
-    #if HAS_DIST_MM_ARG
-      const xyze_float_t cart_dist_mm{0};                 // 길이 힌트 (없어도 됨)
-    #endif
-
-    Planner::buffer_segment_public(target
-      OPTARG(HAS_DIST_MM_ARG, cart_dist_mm)
-      , FR, active_extruder
-    );
-
-    planner.synchronize();
-
-    current_position.x = 100.0f;
-    current_position.y = 220.0f;
-    sync_plan_position();
   }
 
-#endif
-
-
-  ui.refresh();
-
-  TERN_(HAS_DWIN_E3V2_BASIC, DWIN_HomingDone());
-  TERN_(EXTENSIBLE_UI, ExtUI::onHomingDone());
-
-  report_current_position();
-
-  if (ENABLED(NANODLP_Z_SYNC) && (doZ || ENABLED(NANODLP_ALL_AXIS)))
-    SERIAL_ECHOLNPGM(STR_Z_MOVE_COMP);
-
-  TERN_(FULL_REPORT_TO_HOST_FEATURE, set_and_report_grblstate(old_grblstate));
-
-}
+  
