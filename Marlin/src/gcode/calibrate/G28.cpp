@@ -517,28 +517,27 @@ void GcodeSuite::G28() {
     #endif
 
     sync_plan_position();
- // ===== MP_SCARA: G28 Y 후 정면(Theta=G28X 자세 유지 + Psi=0°)을 X120,Y250으로 라벨링 =====
+
+    // ===== MP_SCARA: G28 Y 후 정면(Theta=G28X 자세 유지 + Psi=0°)을 X120,Y250으로 라벨링 =====
     #if ENABLED(MP_SCARA)
-      // G28 Y 단독 명령일 때만 실행 (G28 X, G28, G28 Z 등에서는 실행 안 함)
+
+      // ===== MP_SCARA: G28 Y 단독일 때 정면(X120,Y250) 보정 =====
       if (!doX && doY && !doZ) {
 
-        // G28X 상태에서의 팔꿈치 정면 각도 (지금은 Psi=0°가 정면)
-        constexpr float PSI_FRONT = -11.0f;
+        constexpr float PSI_FRONT = 28.4f; // 팔꿈치 정면 각도 (실측에 맞게 튜닝)
         constexpr float FR        = 10.0f;  // 관절 회전 속도 (mm/s)
 
         // 1) 현재 ABCE(관절) 위치 읽기
         abce_pos_t target = planner.get_axis_positions_mm();
 
-        // 2) X축(Theta, A_AXIS)은 그대로 두고,
-        //    Y축(팔꿈치, Psi = B_AXIS)만 정면 각도로 세팅
-        //    → G28X에서 만든 X정면 자세를 유지하면서 팔만 펴는 동작
+        // 2) Psi(B축)를 정면 각도로 세팅
         target[B_AXIS] = PSI_FRONT;
 
         #if HAS_DIST_MM_ARG
           const xyze_float_t cart_dist_mm{0};
         #endif
 
-        // 3) 관절 공간(Theta/Psi) 기준으로 실제로 기계를 움직이기
+        // 3) B축만 변경된 자세로 천천히 이동
         Planner::buffer_segment_public(
           target
           OPTARG(HAS_DIST_MM_ARG, cart_dist_mm),
@@ -547,24 +546,91 @@ void GcodeSuite::G28() {
         );
         planner.synchronize();
 
-        // 4) 최종 A/B(Theta/Psi) 값 기준으로 XY를 다시 계산
+        // 4) 최종 A/B 각도로부터 FK 수행 (필요 시)
         abce_pos_t final_abce = planner.get_axis_positions_mm();
         const float theta_now = final_abce[A_AXIS];
         const float psi_now   = final_abce[B_AXIS];
 
         forward_kinematics(theta_now, psi_now);
 
-        // 5) 이 자세를 논리 좌표 (120,250)의 정면으로 라벨링
-        //    → 앞으로 G1 X120 Y250 하면 항상 이 포즈로 돌아옴
+        // 5) 이 자세를 항상 X120,Y250 정면으로 라벨링
         current_position.x = 120.0f;
         current_position.y = 250.0f;
-        // Z, E는 그대로 유지
         sync_plan_position();
       }
-    #endif
-    // ===== MP_SCARA 정면(X120,Y250) 보정 끝 =====
 
-  #endif // (원래 있던 큰 #else 블록 종료 주석)
+      // ===== MP_SCARA: G28 X 단독일 때, 홈 찍고 나서 "엔드스탑에서 빠졌다가 다시 엔드스탑 쪽으로 더 들어가기" =====
+      else if (doX && !doY && !doZ) {
+
+        // 엔드스탑 찍은 뒤 추가로 수행할 미세 보정 파라미터
+        constexpr float BACKOFF_ANGLE = 1.0f;   // 엔드스탑 반대 방향(스위치에서 떨어지는 쪽)으로 1도
+        constexpr float PUSH_ANGLE    = 1.4f;   // 다시 엔드스탑(홈 방향) 쪽으로 1.2도 → TRIGGERED 상태에서 더 안쪽으로
+        constexpr float FR            = 10.0f;  // 관절 회전 속도 (mm/s, 천천히)
+
+        // 홈 방향 (+1 / -1) : MP_SCARA에서 A축은 X축 홈 방향과 동일하게 가정
+        const float home_dir = X_HOME_DIR;      // +1이면 +방향이 엔드스탑 쪽, -1이면 -방향이 엔드스탑 쪽
+
+        // 1) 현재 ABCE(관절) 위치 읽기 (G28 X 기본 호밍이 끝난 직후)
+        abce_pos_t target = planner.get_axis_positions_mm();
+
+        // 2) 홈 방향 "반대"로 살짝 빼기 → 엔드스탑에서 떨어지는 방향
+        target[A_AXIS] += -home_dir * BACKOFF_ANGLE;
+
+        #if HAS_DIST_MM_ARG
+          const xyze_float_t cart_dist_mm1{0};
+        #endif
+
+        Planner::buffer_segment_public(
+          target
+          OPTARG(HAS_DIST_MM_ARG, cart_dist_mm1),
+          FR,
+          active_extruder
+        );
+        planner.synchronize();
+
+        // 3) 다시 홈(엔드스탑) 방향으로 약간 진입 + TRIGGERED 상태에서 조금 더 안쪽으로 들어가기
+        target[A_AXIS] += home_dir * PUSH_ANGLE;
+
+        #if HAS_DIST_MM_ARG
+          const xyze_float_t cart_dist_mm2{0};
+        #endif
+
+        // ▶ 이 구간은 엔드스탑을 일부러 더 "누르는" 동작이라, 잠깐 엔드스탑 체크를 끈다
+        endstops.enable(false);
+
+        Planner::buffer_segment_public(
+          target
+          OPTARG(HAS_DIST_MM_ARG, cart_dist_mm2),
+          FR,
+          active_extruder
+        );
+        planner.synchronize();
+
+        // 엔드스탑 체크 다시 켜기
+        endstops.enable(true);
+
+        // 4) 최종 A/B 기준 XY 재계산
+        abce_pos_t final_abce = planner.get_axis_positions_mm();
+        const float theta_now = final_abce[A_AXIS];
+        const float psi_now   = final_abce[B_AXIS];
+
+        forward_kinematics(theta_now, psi_now);
+
+        // 5) 좌표 라벨링
+        //  - 실제 FK 결과를 쓰고 싶으면 cartes.x / cartes.y 사용
+        //  - 지금은 "이 자세를 항상 X120,Y250 정면으로 본다"는 컨셉이므로 고정값 사용
+        // current_position.x = cartes.x;
+        // current_position.y = cartes.y;
+
+        current_position.x = 120.0f;
+        current_position.y = 250.0f;
+
+        sync_plan_position();
+      }
+
+    #endif
+#endif
+
 
 
 
